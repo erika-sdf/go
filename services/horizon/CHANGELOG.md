@@ -8,6 +8,7 @@ file. This project adheres to [Semantic Versioning](http://semver.org/).
 ### Changes
 
 * Add an endpoint that allows querying for which liquidity pools an account is participating in 
+* Remove a feature flag `--captive-core-reuse-storage-dir` (`false` by default) that allows disabling permanent buckets directory of Captive Stellar-Core. This work around is no longer needed since the underlying bug has been fixed in 17.3.0. ([4048](https://github.com/stellar/go/pull/4048))
 
 ## v2.10.0
 
