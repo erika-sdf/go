@@ -314,6 +314,7 @@ func TestCaptivePrepareRangeCloseNotFullyTerminated(t *testing.T) {
 func TestCaptivePrepareRange_ErrClosingSession(t *testing.T) {
 	ctx := context.Background()
 	mockRunner := &stellarCoreRunnerMock{}
+	mockRunner.On("context").Return(ctx)
 	mockRunner.On("close").Return(fmt.Errorf("transient error"))
 
 	captiveBackend := CaptiveStellarCore{
@@ -521,7 +522,7 @@ func TestCaptivePrepareRangeUnboundedRange_ReuseSession(t *testing.T) {
 func TestGetLatestLedgerSequence(t *testing.T) {
 	metaChan := make(chan metaResult, 300)
 
-	// Core will actually start with the last checkpoint before the from ledger
+	// Core will actually start with the last checkpoint before the `from` ledger
 	// and then rewind to the `from` ledger.
 	for i := 2; i <= 200; i++ {
 		meta := buildLedgerCloseMeta(testLedgerHeader{sequence: uint32(i)})
@@ -601,10 +602,16 @@ func TestCaptiveGetLedger(t *testing.T) {
 
 	// requires PrepareRange
 	_, err := captiveBackend.GetLedger(ctx, 64)
-	tt.EqualError(err, "session is closed, call PrepareRange first")
+	tt.EqualError(err, "session is not prepared, call PrepareRange first")
 
-	err = captiveBackend.PrepareRange(ctx, BoundedRange(65, 66))
+	ledgerRange := BoundedRange(65, 66)
+	tt.False(captiveBackend.isPrepared(ledgerRange), "core is not prepared until explicitly prepared")
+	tt.False(captiveBackend.isClosed())
+	err = captiveBackend.PrepareRange(ctx, ledgerRange)
 	assert.NoError(t, err)
+
+	tt.True(captiveBackend.isPrepared(ledgerRange))
+	tt.False(captiveBackend.isClosed())
 
 	_, err = captiveBackend.GetLedger(ctx, 64)
 	tt.Error(err, "requested ledger 64 is behind the captive core stream (expected=66)")
@@ -630,6 +637,7 @@ func TestCaptiveGetLedger(t *testing.T) {
 	tt.NoError(err)
 
 	// closes after last ledger is consumed
+	tt.False(captiveBackend.isPrepared(ledgerRange))
 	tt.True(captiveBackend.isClosed())
 
 	// we should be able to call last ledger even after get ledger is closed
@@ -898,6 +906,8 @@ func TestCaptiveGetLedger_ErrReadingMetaResult(t *testing.T) {
 	tt.NoError(err)
 	tt.Equal(xdr.Uint32(65), meta.V0.LedgerHeader.Header.LedgerSeq)
 
+	tt.False(captiveBackend.isClosed())
+
 	// try reading from an empty buffer
 	_, err = captiveBackend.GetLedger(ctx, 66)
 	tt.EqualError(err, "unmarshalling error")
@@ -990,9 +1000,10 @@ func TestCaptiveAfterClose(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.NoError(t, captiveBackend.Close())
+	assert.True(t, captiveBackend.isClosed())
 
 	_, err = captiveBackend.GetLedger(ctx, boundedRange.to)
-	assert.EqualError(t, err, "session is closed, call PrepareRange first")
+	assert.EqualError(t, err, "session is closed")
 
 	var prepared bool
 	prepared, err = captiveBackend.IsPrepared(ctx, boundedRange)
@@ -1000,7 +1011,7 @@ func TestCaptiveAfterClose(t *testing.T) {
 	assert.NoError(t, err)
 
 	_, err = captiveBackend.GetLatestLedgerSequence(ctx)
-	assert.EqualError(t, err, "stellar-core must be opened to return latest available sequence")
+	assert.EqualError(t, err, "stellar-core must be open to return latest available sequence")
 
 	mockArchive.AssertExpectations(t)
 	mockRunner.AssertExpectations(t)
