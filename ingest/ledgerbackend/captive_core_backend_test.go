@@ -636,13 +636,13 @@ func TestCaptiveGetLedger(t *testing.T) {
 	_, err = captiveBackend.GetLedger(ctx, 66)
 	tt.NoError(err)
 
-	// closes after last ledger is consumed
 	tt.False(captiveBackend.isPrepared(ledgerRange))
-	tt.True(captiveBackend.isClosed())
-
-	// we should be able to call last ledger even after get ledger is closed
+	tt.False(captiveBackend.isClosed())
 	_, err = captiveBackend.GetLedger(ctx, 66)
 	tt.NoError(err)
+
+	// core is not closed unless it's explicitly closed
+	tt.False(captiveBackend.isClosed())
 
 	mockArchive.AssertExpectations(t)
 	mockRunner.AssertExpectations(t)
@@ -912,8 +912,8 @@ func TestCaptiveGetLedger_ErrReadingMetaResult(t *testing.T) {
 	_, err = captiveBackend.GetLedger(ctx, 66)
 	tt.EqualError(err, "unmarshalling error")
 
-	// closes if there is an error getting ledger
-	tt.True(captiveBackend.isClosed())
+	// not closed even if there is an error getting ledger
+	tt.False(captiveBackend.isClosed())
 
 	mockArchive.AssertExpectations(t)
 	mockRunner.AssertExpectations(t)
@@ -1003,7 +1003,7 @@ func TestCaptiveAfterClose(t *testing.T) {
 	assert.True(t, captiveBackend.isClosed())
 
 	_, err = captiveBackend.GetLedger(ctx, boundedRange.to)
-	assert.EqualError(t, err, "session is closed")
+	assert.EqualError(t, err, "stellar-core is no longer usable")
 
 	var prepared bool
 	prepared, err = captiveBackend.IsPrepared(ctx, boundedRange)
@@ -1011,7 +1011,7 @@ func TestCaptiveAfterClose(t *testing.T) {
 	assert.NoError(t, err)
 
 	_, err = captiveBackend.GetLatestLedgerSequence(ctx)
-	assert.EqualError(t, err, "stellar-core must be open to return latest available sequence")
+	assert.EqualError(t, err, "stellar-core is no longer usable")
 
 	mockArchive.AssertExpectations(t)
 	mockRunner.AssertExpectations(t)

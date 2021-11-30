@@ -366,7 +366,7 @@ func (c *CaptiveStellarCore) startPreparingRange(ctx context.Context, ledgerRang
 }
 
 // PrepareRange prepares the given range (including from and to) to be loaded.
-// Captive stellar-core backend needs to initalize Stellar-Core state to be
+// Captive stellar-core backend needs to initialize Stellar-Core state to be
 // able to stream ledgers.
 // Stellar-Core mode depends on the provided ledgerRange:
 //   * For BoundedRange it will start Stellar-Core in catchup mode.
@@ -399,6 +399,14 @@ func (c *CaptiveStellarCore) IsPrepared(ctx context.Context, ledgerRange Range) 
 
 func (c *CaptiveStellarCore) isPrepared(ledgerRange Range) bool {
 	if c.isClosed() {
+		return false
+	}
+
+	if c.stellarCoreRunner == nil {
+		return false
+	}
+
+	if c.coreHasError() {
 		return false
 	}
 
@@ -466,9 +474,12 @@ func (c *CaptiveStellarCore) GetLedger(ctx context.Context, sequence uint32) (xd
 		return xdr.LedgerCloseMeta{}, errors.New("session is not prepared, call PrepareRange first")
 	}
 
-	// This should never happen, but should return an error if it does.
 	if c.stellarCoreRunner == nil {
-		return xdr.LedgerCloseMeta{}, errors.New("stellarCoreRunner should not be nil when it is prepared")
+		return xdr.LedgerCloseMeta{}, errors.New("stellar-core cannot be nil, call PrepareRange first")
+	}
+
+	if c.coreHasError() {
+		return xdr.LedgerCloseMeta{}, errors.New("stellar-core has an error, call PrepareRange first")
 	}
 
 	if sequence < c.nextExpectedSequence() {
@@ -603,11 +614,13 @@ func (c *CaptiveStellarCore) GetLatestLedgerSequence(ctx context.Context) (uint3
 		return 0, errors.New("stellar-core is no longer usable")
 	}
 	if c.prepared == nil {
-		return 0, errors.New("stellar-core must be prepared to return latest available sequence")
+		return 0, errors.New("stellar-core must be prepared, call PrepareRange first")
 	}
-	// This should never happen, but should return an error if it does.
 	if c.stellarCoreRunner == nil {
-		return 0, errors.New("stellar-core should not be nil when it is prepared")
+		return 0, errors.New("stellar-core cannot be nil, call PrepareRange first")
+	}
+	if c.coreHasError() {
+		return 0, errors.New("stellar-core has an error, call PrepareRange first")
 	}
 	if c.lastLedger == nil {
 		return c.nextExpectedSequence() - 1 + uint32(len(c.stellarCoreRunner.getMetaPipe())), nil
@@ -615,8 +628,11 @@ func (c *CaptiveStellarCore) GetLatestLedgerSequence(ctx context.Context) (uint3
 	return *c.lastLedger, nil
 }
 
+func (c *CaptiveStellarCore) coreHasError() bool {
+	return c.stellarCoreRunner != nil && c.stellarCoreRunner.context().Err() != nil
+}
 func (c *CaptiveStellarCore) isClosed() bool {
-	return c.closed || (c.stellarCoreRunner != nil && c.stellarCoreRunner.context().Err() != nil)
+	return c.closed
 }
 
 // Close closes existing Stellar-Core process, streaming sessions and removes all
