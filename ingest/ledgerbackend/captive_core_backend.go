@@ -459,11 +459,16 @@ func (c *CaptiveStellarCore) GetLedger(ctx context.Context, sequence uint32) (xd
 	}
 
 	if c.isClosed() {
-		return xdr.LedgerCloseMeta{}, errors.New("session is closed")
+		return xdr.LedgerCloseMeta{}, errors.New("stellar-core is no longer usable")
 	}
 
 	if c.prepared == nil {
 		return xdr.LedgerCloseMeta{}, errors.New("session is not prepared, call PrepareRange first")
+	}
+
+	// This should never happen, but should return an error if it does.
+	if c.stellarCoreRunner == nil {
+		return xdr.LedgerCloseMeta{}, errors.New("stellarCoreRunner should not be nil when it is prepared")
 	}
 
 	if sequence < c.nextExpectedSequence() {
@@ -595,12 +600,15 @@ func (c *CaptiveStellarCore) GetLatestLedgerSequence(ctx context.Context) (uint3
 	defer c.stellarCoreLock.RUnlock()
 
 	if c.isClosed() {
-		return 0, errors.New("stellar-core must be open to return latest available sequence")
+		return 0, errors.New("stellar-core is no longer usable")
 	}
 	if c.prepared == nil {
 		return 0, errors.New("stellar-core must be prepared to return latest available sequence")
 	}
-
+	// This should never happen, but should return an error if it does.
+	if c.stellarCoreRunner == nil {
+		return 0, errors.New("stellar-core should not be nil when it is prepared")
+	}
 	if c.lastLedger == nil {
 		return c.nextExpectedSequence() - 1 + uint32(len(c.stellarCoreRunner.getMetaPipe())), nil
 	}
@@ -619,6 +627,8 @@ func (c *CaptiveStellarCore) Close() error {
 	c.stellarCoreLock.RLock()
 	defer c.stellarCoreLock.RUnlock()
 
+	c.closed = true
+
 	// after the CaptiveStellarCore context is canceled all subsequent calls to PrepareRange() will fail
 	c.cancel()
 
@@ -631,6 +641,5 @@ func (c *CaptiveStellarCore) Close() error {
 	if c.stellarCoreRunner != nil {
 		return c.stellarCoreRunner.close()
 	}
-	c.closed = true
 	return nil
 }
