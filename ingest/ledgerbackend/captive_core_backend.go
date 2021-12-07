@@ -405,11 +405,9 @@ func (c *CaptiveStellarCore) isPrepared(ledgerRange Range) bool {
 	if c.stellarCoreRunner == nil {
 		return false
 	}
-
-	if c.coreHasError() {
+	if c.closed {
 		return false
 	}
-
 	lastLedger := uint32(0)
 	if c.lastLedger != nil {
 		lastLedger = *c.lastLedger
@@ -477,8 +475,7 @@ func (c *CaptiveStellarCore) GetLedger(ctx context.Context, sequence uint32) (xd
 	if c.stellarCoreRunner == nil {
 		return xdr.LedgerCloseMeta{}, errors.New("stellar-core cannot be nil, call PrepareRange first")
 	}
-
-	if c.coreHasError() {
+	if c.closed {
 		return xdr.LedgerCloseMeta{}, errors.New("stellar-core has an error, call PrepareRange first")
 	}
 
@@ -619,8 +616,9 @@ func (c *CaptiveStellarCore) GetLatestLedgerSequence(ctx context.Context) (uint3
 	if c.stellarCoreRunner == nil {
 		return 0, errors.New("stellar-core cannot be nil, call PrepareRange first")
 	}
-	if c.coreHasError() {
-		return 0, errors.New("stellar-core has an error, call PrepareRange first")
+	if c.closed {
+		return 0, errors.New("stellar-core is closed, call PrepareRange first")
+
 	}
 	if c.lastLedger == nil {
 		return c.nextExpectedSequence() - 1 + uint32(len(c.stellarCoreRunner.getMetaPipe())), nil
@@ -628,9 +626,6 @@ func (c *CaptiveStellarCore) GetLatestLedgerSequence(ctx context.Context) (uint3
 	return *c.lastLedger, nil
 }
 
-func (c *CaptiveStellarCore) coreHasError() bool {
-	return c.stellarCoreRunner != nil && c.stellarCoreRunner.context().Err() != nil
-}
 func (c *CaptiveStellarCore) isClosed() bool {
 	return c.closed
 }

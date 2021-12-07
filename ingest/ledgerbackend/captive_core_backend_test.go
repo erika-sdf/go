@@ -301,11 +301,9 @@ func TestCaptivePrepareRangeCloseNotFullyTerminated(t *testing.T) {
 
 	// Simulates a long (but graceful) shutdown...
 	cancel()
-	mockRunner.On("close").Return(nil)
-	mockRunner.On("getProcessExitError").Return(false, nil).Once()
 
 	err = captiveBackend.PrepareRange(ctx, BoundedRange(100, 200))
-	assert.EqualError(t, err, "error starting prepare range: the previous Stellar-Core instance is still running")
+	assert.NoError(t, err)
 
 	mockRunner.AssertExpectations(t)
 	mockArchive.AssertExpectations(t)
@@ -314,7 +312,6 @@ func TestCaptivePrepareRangeCloseNotFullyTerminated(t *testing.T) {
 func TestCaptivePrepareRange_ErrClosingSession(t *testing.T) {
 	ctx := context.Background()
 	mockRunner := &stellarCoreRunnerMock{}
-	mockRunner.On("context").Return(ctx)
 	mockRunner.On("close").Return(fmt.Errorf("transient error"))
 
 	captiveBackend := CaptiveStellarCore{
