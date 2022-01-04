@@ -84,21 +84,17 @@ func (c *Change) LedgerEntryChangeType() xdr.LedgerEntryChangeType {
 
 // getLiquidityPool gets the most recent state of the LiquidityPool that exists or existed.
 func (c *Change) getLiquidityPool() (*xdr.LiquidityPoolEntry, error) {
-	var pre, post *xdr.LiquidityPoolEntry
+	var entry *xdr.LiquidityPoolEntry
 	if c.Pre != nil {
-		pre = c.Pre.Data.LiquidityPool
+		entry = c.Pre.Data.LiquidityPool
 	}
 	if c.Post != nil {
-		post = c.Post.Data.LiquidityPool
+		entry = c.Post.Data.LiquidityPool
 	}
-	if pre == nil && post == nil {
-		return &xdr.LiquidityPoolEntry{}, errors.New(
-			"both pre and post entries cannot be nil; this change may not include a liquidity pool")
+	if entry == nil {
+		return &xdr.LiquidityPoolEntry{}, errors.New("this change does not include a liquidity pool")
 	}
-	if post != nil {
-		return post, nil
-	}
-	return pre, nil
+	return entry, nil
 }
 
 // GetLiquidityPoolType returns the liquidity pool type.
