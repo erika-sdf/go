@@ -82,6 +82,34 @@ func (c *Change) LedgerEntryChangeType() xdr.LedgerEntryChangeType {
 	}
 }
 
+// getLiquidityPool gets the most recent state of the LiquidityPool that exists or existed.
+func (c *Change) getLiquidityPool() (*xdr.LiquidityPoolEntry, error) {
+	var pre, post *xdr.LiquidityPoolEntry
+	if c.Pre != nil {
+		pre = c.Pre.Data.LiquidityPool
+	}
+	if c.Post != nil {
+		post = c.Post.Data.LiquidityPool
+	}
+	if pre == nil && post == nil {
+		return &xdr.LiquidityPoolEntry{}, errors.New(
+			"both pre and post entries cannot be nil; this change may not include a liquidity pool")
+	}
+	if post != nil {
+		return post, nil
+	}
+	return pre, nil
+}
+
+// GetLiquidityPoolType returns the liquidity pool type.
+func (c *Change) GetLiquidityPoolType() (xdr.LiquidityPoolType, error) {
+	lp, err := c.getLiquidityPool()
+	if err != nil {
+		return xdr.LiquidityPoolType(0), err
+	}
+	return lp.Body.Type, nil
+}
+
 // AccountChangedExceptSigners returns true if account has changed WITHOUT
 // checking the signers (except master key weight!). In other words, if the only
 // change is connected to signers, this function will return false.
