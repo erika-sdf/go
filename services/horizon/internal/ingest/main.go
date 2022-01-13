@@ -163,7 +163,6 @@ type System interface {
 	BuildGenesisState() error
 	Shutdown()
 }
-
 type system struct {
 	metrics Metrics
 	ctx     context.Context
@@ -474,6 +473,11 @@ func (s *system) RegisterMetrics(registry *prometheus.Registry) {
 //     a database so order book graph is updated but database is not overwritten.
 func (s *system) Run() {
 	s.runStateMachine(startState{})
+	/*s.runStateMachine(verifyRangeState{
+		fromLedger:  39137121,
+		toLedger:    39151869,
+		verifyState: false,
+	})*/
 }
 
 func (s *system) StressTest(numTransactions, changesPerTransaction int) error {

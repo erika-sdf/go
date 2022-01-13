@@ -688,7 +688,7 @@ func (h reingestHistoryRangeState) ingestRange(s *system, fromLedger, toLedger u
 		if err != nil {
 			return errors.Wrap(err, "error getting ledger")
 		}
-
+		log.Infof("*** erika *** got ledger %+v", ledgerCloseMeta)
 		if err = runTransactionProcessorsOnLedger(s, ledgerCloseMeta); err != nil {
 			return err
 		}
