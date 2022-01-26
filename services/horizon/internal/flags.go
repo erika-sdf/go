@@ -227,6 +227,8 @@ func Flags() (*Config, support.ConfigOptions) {
 			Name:      StellarCoreURLFlagName,
 			ConfigKey: &config.StellarCoreURL,
 			OptType:   types.String,
+			// Used for txns only
+			//FlagDefault: "core-live-a.stellar.org:11625",
 			Usage:     "stellar-core to connect with (for http commands). If unset and the local Captive core is enabled, it will use http://localhost:<stellar_captive_core_http_port>",
 		},
 		&support.ConfigOption{
@@ -510,6 +512,26 @@ func NewAppFromFlags(config *Config, flags support.ConfigOptions) (*App, error) 
 		return nil, fmt.Errorf("flag --%s cannot be empty", StellarCoreDBURLFlagName)
 	}
 	app, err := NewApp(*config)
+	if err != nil {
+		return nil, fmt.Errorf("cannot initialize app: %s", err)
+	}
+	return app, nil
+}
+
+// NewAppFromFlags constructs a new Horizon App from the given command line flags
+func NewNoSqlAppFromFlags(config *Config, flags support.ConfigOptions) (*App, error) {
+	err := ApplyFlags(config, flags, ApplyOptions{RequireCaptiveCoreConfig: true, AlwaysIngest: false})
+	if err != nil {
+		return nil, err
+	}
+	// Validate app-specific arguments
+	if config.StellarCoreURL == "" {
+		return nil, fmt.Errorf("flag --%s cannot be empty", StellarCoreURLFlagName)
+	}
+	if config.Ingest && !config.EnableCaptiveCoreIngestion && config.StellarCoreDatabaseURL == "" {
+		return nil, fmt.Errorf("flag --%s cannot be empty", StellarCoreDBURLFlagName)
+	}
+	app, err := NewNoSqlApp(*config)
 	if err != nil {
 		return nil, fmt.Errorf("cannot initialize app: %s", err)
 	}

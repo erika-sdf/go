@@ -6,6 +6,7 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"github.com/stellar/go/services/horizon/nosql"
 	"net/http"
 	"sync"
 	"time"
@@ -88,6 +89,7 @@ type Config struct {
 
 	// The checkpoint frequency will be 64 unless you are using an exotic test setup.
 	CheckpointFrequency uint32
+	BoltStore *nosql.BoltStore
 }
 
 const (
@@ -246,7 +248,10 @@ func NewSystem(config Config) (System, error) {
 		}
 	}
 
-	historyQ := &history.Q{config.HistorySession.Clone()}
+	var historyQ history.IngestionQ
+	if config.HistorySession != nil {
+		historyQ = &history.Q{config.HistorySession.Clone()}
+	}
 
 	historyAdapter := newHistoryArchiveAdapter(archive)
 
@@ -473,11 +478,6 @@ func (s *system) RegisterMetrics(registry *prometheus.Registry) {
 //     a database so order book graph is updated but database is not overwritten.
 func (s *system) Run() {
 	s.runStateMachine(startState{})
-	/*s.runStateMachine(verifyRangeState{
-		fromLedger:  39137121,
-		toLedger:    39151869,
-		verifyState: false,
-	})*/
 }
 
 func (s *system) StressTest(numTransactions, changesPerTransaction int) error {
@@ -575,8 +575,10 @@ func (s *system) runStateMachine(cur stateMachineNode) error {
 		// creating and disposing its own transaction.
 		// We should never enter a new state with the transaction
 		// from the previous state.
-		if s.historyQ.GetTx() != nil {
-			panic("unexpected transaction")
+		if s.historyQ != nil {
+			if s.historyQ.GetTx() != nil {
+				panic("unexpected transaction")
+			}
 		}
 
 		next, err := cur.run(s)

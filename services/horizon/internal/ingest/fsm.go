@@ -663,10 +663,7 @@ func (h reingestHistoryRangeState) String() string {
 	)
 }
 
-func (h reingestHistoryRangeState) ingestRange(s *system, fromLedger, toLedger uint32) error {
-	if s.historyQ.GetTx() == nil {
-		return errors.New("expected transaction to be present")
-	}
+func (h reingestHistoryRangeState) ingestRange(s *system, fromLedger, toLedger uint32) (int, error) {
 
 	// Clear history data before ingesting - used in `reingest range` command.
 	start, end, err := toid.LedgerRangeInclusive(
@@ -674,27 +671,37 @@ func (h reingestHistoryRangeState) ingestRange(s *system, fromLedger, toLedger u
 		int32(toLedger),
 	)
 	if err != nil {
-		return errors.Wrap(err, "Invalid range")
+		return 0, errors.Wrap(err, "Invalid range")
 	}
 
-	err = s.historyQ.DeleteRangeAll(s.ctx, start, end)
+	err = s.config.BoltStore.DeleteRangeAll(start, end)
 	if err != nil {
-		return errors.Wrap(err, "error in DeleteRangeAll")
+		return 0, errors.Wrap(err, "error in DeleteRangeAll")
 	}
 
+	numTotalBytes := 0
 	for cur := fromLedger; cur <= toLedger; cur++ {
 		var ledgerCloseMeta xdr.LedgerCloseMeta
 		ledgerCloseMeta, err = s.ledgerBackend.GetLedger(s.ctx, cur)
 		if err != nil {
-			return errors.Wrap(err, "error getting ledger")
+			return 0, errors.Wrap(err, "error getting ledger")
 		}
-		log.Infof("*** erika *** got ledger %+v", ledgerCloseMeta)
-		if err = runTransactionProcessorsOnLedger(s, ledgerCloseMeta); err != nil {
-			return err
+		bytes, err := ledgerCloseMeta.MarshalBinary()
+		if err != nil {
+            return 0, errors.Wrap(err, "error marshalling")
+		}
+		numTotalBytes += len(bytes)
+		//log.Infof("*** got ledger %+v", ledgerCloseMeta)
+		//if err = runTransactionProcessorsOnLedger(s, ledgerCloseMeta); err != nil {
+		//	return 0, err
+		//}
+		if err = s.config.BoltStore.WriteLedger(ledgerCloseMeta); err != nil {
+			return 0, err
 		}
 	}
+	//log.Infof("*** number of bytes over %d, %d ledgers: %d bytes", toLedger, fromLedger, numTotalBytes )
 
-	return nil
+	return numTotalBytes, nil
 }
 
 func (h reingestHistoryRangeState) prepareRange(s *system) (transition, error) {
@@ -748,7 +755,7 @@ func (h reingestHistoryRangeState) run(s *system) (transition, error) {
 			return stop(), errors.Wrap(err, getLastIngestedErrMsg)
 		}
 
-		if err := h.ingestRange(s, h.fromLedger, h.toLedger); err != nil {
+		if _, err := h.ingestRange(s, h.fromLedger, h.toLedger); err != nil {
 			return stop(), err
 		}
 
@@ -756,7 +763,7 @@ func (h reingestHistoryRangeState) run(s *system) (transition, error) {
 			return stop(), errors.Wrap(err, commitErrMsg)
 		}
 	} else {
-		lastIngestedLedger, err := s.historyQ.GetLastLedgerIngestNonBlocking(s.ctx)
+		lastIngestedLedger, err := s.config.BoltStore.GetLastLedgerIngestNonBlocking()
 		if err != nil {
 			return stop(), errors.Wrap(err, getLastIngestedErrMsg)
 		}
@@ -772,35 +779,41 @@ func (h reingestHistoryRangeState) run(s *system) (transition, error) {
 		}
 		startTime = time.Now()
 
+		numBytes := 0
 		for cur := h.fromLedger; cur <= h.toLedger; cur++ {
-			err = func(ledger uint32) error {
-				if e := s.historyQ.Begin(); e != nil {
-					return errors.Wrap(e, "Error starting a transaction")
-				}
-				defer s.historyQ.Rollback()
+			b, err := func(ledger uint32) (int, error) {
+				/*if e := s.historyQ.Begin(); e != nil {
+					return 0, errors.Wrap(e, "Error starting a transaction")
+				}*/
+				//defer s.historyQ.Rollback()
 
 				// ingest each ledger in a separate transaction to prevent deadlocks
 				// when acquiring ShareLocks from multiple parallel reingest range processes
-				if e := h.ingestRange(s, ledger, ledger); e != nil {
-					return e
+				var b int
+				var e error
+				if b, e = h.ingestRange(s, ledger, ledger); e != nil {
+					return 0, e
 				}
 
+				/*
 				if e := s.historyQ.Commit(); e != nil {
-					return errors.Wrap(e, commitErrMsg)
-				}
+					return 0, errors.Wrap(e, commitErrMsg)
+				}*/
 
-				return nil
+				return b, nil
 			}(cur)
 			if err != nil {
 				return stop(), err
 			}
+			numBytes += b
 		}
+		log.Infof("***** num bytes %+v", numBytes)
 	}
 
-	err := s.historyQ.RebuildTradeAggregationBuckets(s.ctx, h.fromLedger, h.toLedger)
+	/*err := s.historyQ.RebuildTradeAggregationBuckets(s.ctx, h.fromLedger, h.toLedger)
 	if err != nil {
 		return stop(), errors.Wrap(err, "Error rebuilding trade aggregations")
-	}
+	}*/
 
 	log.WithFields(logpkg.F{
 		"from":     h.fromLedger,

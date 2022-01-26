@@ -136,6 +136,7 @@ var dbMigrateRedoCmd = &cobra.Command{
 
 		return migrate(schema.MigrateRedo, count)
 	},
+
 }
 
 var dbMigrateStatusCmd = &cobra.Command{

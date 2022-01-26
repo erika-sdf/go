@@ -36,6 +36,7 @@ type App struct {
 	doneOnce        sync.Once
 	config          Config
 	webServer       *httpx.Server
+	//boltStore *ingest.BoltStore
 	historyQ        *history.Q
 	primaryHistoryQ *history.Q
 	ctx             context.Context
@@ -64,6 +65,134 @@ const tickerMaxFrequency = 1 * time.Second
 const tickerMaxDuration = 5 * time.Second
 
 // NewApp constructs an new App instance from the provided config.
+func NewNoSqlApp(config Config) (*App, error) {
+	a := &App{
+		config:         config,
+		ledgerState:    &ledger.State{},
+		horizonVersion: app.Version(),
+		ticks:          time.NewTicker(tickerMaxFrequency),
+		done:           make(chan struct{}),
+	}
+
+	if err := a.initNoSql(); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+
+func (a *App) initNoSql() error {
+	// app-context
+	a.ctx, a.cancel = context.WithCancel(context.Background())
+
+	// log
+	log.DefaultLogger.SetLevel(a.config.LogLevel)
+	log.DefaultLogger.AddHook(logmetrics.DefaultMetrics)
+
+	// loggly
+	initLogglyLog(a)
+
+	// stellarCoreInfo
+	a.UpdateStellarCoreInfo(a.ctx)
+	routerConfig := httpx.RouterConfig{
+		DBSession:               nil,
+		TxSubmitter:             a.submitter,
+		RateQuota:               a.config.RateQuota,
+		BehindCloudflare:        a.config.BehindCloudflare,
+		BehindAWSLoadBalancer:   a.config.BehindAWSLoadBalancer,
+		SSEUpdateFrequency:      a.config.SSEUpdateFrequency,
+		StaleThreshold:          a.config.StaleThreshold,
+		ConnectionTimeout:       a.config.ConnectionTimeout,
+		NetworkPassphrase:       a.config.NetworkPassphrase,
+		MaxPathLength:           a.config.MaxPathLength,
+		MaxAssetsPerPathRequest: a.config.MaxAssetsPerPathRequest,
+		PathFinder:              a.paths,
+		PrometheusRegistry:      a.prometheusRegistry,
+		CoreGetter:              a,
+		HorizonVersion:          a.horizonVersion,
+		FriendbotURL:            a.config.FriendbotURL,
+		HealthCheck: healthCheck{
+			session: nil,
+			ctx:     a.ctx,
+			core: &stellarcore.Client{
+				HTTP: &http.Client{Timeout: infoRequestTimeout},
+				URL:  a.config.StellarCoreURL,
+			},
+			cache: newHealthCache(healthCacheTTL),
+		},
+	}
+
+	var err error
+	config := httpx.ServerConfig{
+		Port:      uint16(a.config.Port),
+		AdminPort: uint16(a.config.AdminPort),
+	}
+	if a.config.TLSCert != "" && a.config.TLSKey != "" {
+		config.TLSConfig = &httpx.TLSConfig{
+			CertPath: a.config.TLSCert,
+			KeyPath:  a.config.TLSKey,
+		}
+	}
+	a.webServer, err = httpx.NewServer(config, routerConfig, a.ledgerState)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Serve starts the horizon web server, binding it to a socket, setting up
+// the shutdown signals.
+func (a *App) ServeNoSql() error {
+
+	log.Infof("Starting horizon on :%d (ingest: %v)", a.config.Port, a.config.Ingest)
+
+	if a.config.AdminPort != 0 {
+		log.Infof("Starting internal server on :%d", a.config.AdminPort)
+	}
+
+	// WaitGroup for all go routines. Makes sure that DB is closed when
+	// all services gracefully shutdown.
+	var wg sync.WaitGroup
+
+	if a.ingester != nil {
+		wg.Add(1)
+		go func() {
+			a.ingester.Run()
+			wg.Done()
+		}()
+	}
+
+	// configure shutdown signal handler
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		select {
+		case <-signalChan:
+			a.Close()
+		case <-a.done:
+			return
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		a.waitForDone()
+		wg.Done()
+	}()
+
+	err := a.webServer.Serve()
+	if err != nil && err != http.ErrServerClosed {
+		return err
+	}
+
+	wg.Wait()
+	log.Info("stopped")
+	return nil
+}
+
+// NewApp constructs an new App instance from the provided config.
 func NewApp(config Config) (*App, error) {
 	a := &App{
 		config:         config,
@@ -73,7 +202,7 @@ func NewApp(config Config) (*App, error) {
 		done:           make(chan struct{}),
 	}
 
-	if err := a.init(); err != nil {
+	if err := a.initNoSql(); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -153,7 +282,7 @@ func (a *App) Serve() error {
 	}
 
 	wg.Wait()
-	a.CloseDB()
+	//a.CloseDB()
 
 	log.Info("stopped")
 	return nil
@@ -244,7 +373,7 @@ func (a *App) UpdateHorizonLedgerState(ctx context.Context) {
 	}
 
 	var err error
-	next.HistoryLatest, next.HistoryLatestClosedAt, err =
+	/*next.HistoryLatest, next.HistoryLatestClosedAt, err =
 		a.HistoryQ().LatestLedgerSequenceClosedAt(ctx)
 	if err != nil {
 		logErr(err, "failed to load the latest known ledger state from history DB")
@@ -261,8 +390,13 @@ func (a *App) UpdateHorizonLedgerState(ctx context.Context) {
 	if err != nil {
 		logErr(err, "failed to load the oldest known exp ledger state from history DB")
 		return
-	}
+	}*/
 
+	next.ExpHistoryLatest, err = a.config.BoltStore.GetLastLedgerIngestNonBlocking()
+	if err != nil {
+		logErr(err, "failed to load the oldest known exp ledger state from history DB")
+		return
+	}
 	a.ledgerState.SetHorizonStatus(next)
 }
 
@@ -478,6 +612,7 @@ func (a *App) init() error {
 	// stellarCoreInfo
 	a.UpdateStellarCoreInfo(a.ctx)
 
+/*
 	// horizon-db and core-db
 	mustInitHorizonDB(a)
 
@@ -507,9 +642,9 @@ func (a *App) init() error {
 
 	// txsub.metrics
 	initTxSubMetrics(a)
-
+*/
 	routerConfig := httpx.RouterConfig{
-		DBSession:               a.historyQ.SessionInterface,
+		DBSession:               nil,//a.historyQ.SessionInterface,
 		TxSubmitter:             a.submitter,
 		RateQuota:               a.config.RateQuota,
 		BehindCloudflare:        a.config.BehindCloudflare,
@@ -526,7 +661,7 @@ func (a *App) init() error {
 		HorizonVersion:          a.horizonVersion,
 		FriendbotURL:            a.config.FriendbotURL,
 		HealthCheck: healthCheck{
-			session: a.historyQ.SessionInterface,
+			session: nil, //a.historyQ.SessionInterface,
 			ctx:     a.ctx,
 			core: &stellarcore.Client{
 				HTTP: &http.Client{Timeout: infoRequestTimeout},
@@ -535,10 +670,10 @@ func (a *App) init() error {
 			cache: newHealthCache(healthCacheTTL),
 		},
 	}
-
-	if a.primaryHistoryQ != nil {
-		routerConfig.PrimaryDBSession = a.primaryHistoryQ.SessionInterface
-	}
+	/*
+		if a.primaryHistoryQ != nil {
+			routerConfig.PrimaryDBSession = a.primaryHistoryQ.SessionInterface
+		}*/
 
 	var err error
 	config := httpx.ServerConfig{

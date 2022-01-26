@@ -370,9 +370,9 @@ func (o *OrderBookStream) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			if err := o.Update(ctx); err != nil && !isCancelledError(err) {
+			/*if err := o.Update(ctx); err != nil && !isCancelledError(err) {
 				log.WithError(err).Error("could not apply updates from order book stream")
-			}
+			}*/
 		case <-ctx.Done():
 			log.Info("shutting down OrderBookStream")
 			return

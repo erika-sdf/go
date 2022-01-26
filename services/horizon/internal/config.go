@@ -1,6 +1,7 @@
 package horizon
 
 import (
+	"github.com/stellar/go/services/horizon/nosql"
 	"net/url"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 // Config is the configuration for horizon.  It gets populated by the
 // app's main function and is provided to NewApp.
 type Config struct {
+	BoltStore *nosql.BoltStore
 	DatabaseURL        string
 	RoDatabaseURL      string
 	HistoryArchiveURLs []string
