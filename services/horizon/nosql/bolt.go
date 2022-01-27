@@ -11,9 +11,14 @@ import (
 const (
 	KeyValueBucketName   = "keyValue"
 	LedgerMetaBucketName = "ledgerMeta"
+	TxnToLedgerBucketName = "txnToLedger"
 
 	LastIngestedLedgerKey = "lastIngestedLedger"
 )
+
+func GetBuckets() []string {
+	return []string{KeyValueBucketName, LedgerMetaBucketName, TxnToLedgerBucketName}
+}
 
 type BoltStore struct {
 	filename string
@@ -38,7 +43,7 @@ func (b *BoltStore) Close() {
 	b.db.Close()
 }
 
-func iToBa(i interface{}, numBits int) []byte {
+func IToBa(i interface{}, numBits int) []byte {
 	ba := make([]byte, numBits/8)
 	switch i.(type) {
 	case int32:
@@ -55,11 +60,18 @@ func iToBa(i interface{}, numBits int) []byte {
 	return ba
 }
 
-func baToI(ba []byte) uint32 {
+func BaToI32(ba []byte) uint32 {
 	if len(ba) == 0 {
 		ba = []byte{0, 0, 0, 0}
 	}
 	return binary.LittleEndian.Uint32(ba)
+}
+
+func baToI64(ba []byte) uint64 {
+	if len(ba) == 0 {
+		ba = []byte{0, 0, 0, 0, 0, 0, 0, 0}
+	}
+	return binary.LittleEndian.Uint64(ba)
 }
 
 func (b *BoltStore) CreateBucketIfNotExists(bucketName string) error {
@@ -80,8 +92,8 @@ func (b *BoltStore) WriteLedger(l xdr.LedgerCloseMeta) error {
 			return err
 		}
 		log.Errorf("Writing ledger %v", l.LedgerSequence())
-		log.Errorf("%v: %v", l.LedgerSequence(), iToBa(l.LedgerSequence(), 32))
-		err = b.Put(iToBa(l.LedgerSequence(), 32), lBytes)
+		log.Errorf("%v: %v", l.LedgerSequence(), IToBa(l.LedgerSequence(), 32))
+		err = b.Put(IToBa(l.LedgerSequence(), 32), lBytes)
 		return err
 	})
 }
@@ -90,19 +102,31 @@ func (b *BoltStore) GetLedger(id uint32) (xdr.LedgerCloseMeta, error) {
 	l := xdr.LedgerCloseMeta{}
 	err := b.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(LedgerMetaBucketName))
-		log.Errorf("%v: %v", id, iToBa(id, 32))
-		g := b.Get(iToBa(id, 32))
+		log.Errorf("%v: %v", id, IToBa(id, 32))
+		g := b.Get(IToBa(id, 32))
 		err := l.UnmarshalBinary(g)
 		return err
 	})
 	return l, err
 }
 
+func (b *BoltStore) GetLedgerFromTransaction(id int64) (uint32, error) {
+    ledgerId := uint32(0)
+	err := b.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(TxnToLedgerBucketName))
+		ledgerIdBa := b.Get(IToBa(id, 64))
+		ledgerId = BaToI32(ledgerIdBa)
+		return nil
+	})
+
+return ledgerId, err
+}
+
 func (b *BoltStore) DeleteRangeAll(start, end int64) error {
 	return b.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(LedgerMetaBucketName))
 		for l := start; l <= end; l++ {
-			err := b.Delete(iToBa(l, 64))
+			err := b.Delete(IToBa(l, 64))
 			return err
 		}
 		return nil
@@ -114,7 +138,7 @@ func (b *BoltStore) GetLastLedgerIngestNonBlocking() (uint32, error) {
 	err := b.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(KeyValueBucketName))
 		lastIngestedLedger := b.Get([]byte(LastIngestedLedgerKey))
-		lastIngestedLedgerSeq = int32(baToI(lastIngestedLedger))
+		lastIngestedLedgerSeq = int32(BaToI32(lastIngestedLedger))
 		return nil
 	})
 	if err != nil {

@@ -11,11 +11,6 @@ type LedgerHandler struct {
 	db *BoltStore
 }
 
-type ledgerResponse struct {
-	ID       string `json:"id"`
-	Sequence string `json:"sequence"`
-}
-
 func (h *LedgerHandler) Handler(c *fiber.Ctx) error {
 	id := c.Params("id")
 	i, err := strconv.Atoi(id)
@@ -38,3 +33,4 @@ func (h *LedgerHandler) Handler(c *fiber.Ctx) error {
 	}
 	return c.JSON(l)
 }
+

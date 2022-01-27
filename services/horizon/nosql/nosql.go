@@ -47,6 +47,15 @@ func (s *NoSqlServer) Run() error {
 	app.Get("/ledgers/:id", (&LedgerHandler{
 		db: s.db,
 	}).Handler)
+	app.Get("/ledgers/:id/transactions", (&TransactionHandler{
+		db: s.db,
+	}).ByLedgerHandler)
+	app.Get("/transactions/:id", (&TransactionHandler{
+		db: s.db,
+	}).Handler)
+	//app.Get("/operations/:id", (&OperationHandler{
+	//	db: s.db,
+	//}).Handler)
 
 	port := os.Getenv("PORT")
 	if port == "" {
