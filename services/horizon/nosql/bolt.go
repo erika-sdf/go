@@ -1,6 +1,8 @@
 package nosql
 
 import (
+	"bytes"
+	"compress/lzw"
 	"encoding/binary"
 	"fmt"
 	"github.com/boltdb/bolt"
@@ -13,11 +15,13 @@ const (
 	LedgerMetaBucketName = "ledgerMeta"
 	TxnToLedgerBucketName = "txnToLedger"
 
+	CompressedLedgerMetaBucketName = "ledgerMetaCompressed"
+
 	LastIngestedLedgerKey = "lastIngestedLedger"
 )
 
 func GetBuckets() []string {
-	return []string{KeyValueBucketName, LedgerMetaBucketName, TxnToLedgerBucketName}
+	return []string{KeyValueBucketName, LedgerMetaBucketName, TxnToLedgerBucketName, CompressedLedgerMetaBucketName}
 }
 
 type BoltStore struct {
@@ -101,10 +105,21 @@ func (b *BoltStore) WriteLedger(l xdr.LedgerCloseMeta) error {
 func (b *BoltStore) GetLedger(id uint32) (xdr.LedgerCloseMeta, error) {
 	l := xdr.LedgerCloseMeta{}
 	err := b.db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte(LedgerMetaBucketName))
+		//b := tx.Bucket([]byte(LedgerMetaBucketName))
+		b := tx.Bucket([]byte(CompressedLedgerMetaBucketName))
 		log.Errorf("%v: %v", id, IToBa(id, 32))
 		g := b.Get(IToBa(id, 32))
-		err := l.UnmarshalBinary(g)
+
+		r := lzw.NewReader(bytes.NewBuffer(g), lzw.LSB, 8)
+
+		ba := make([]byte, 1e7)
+		_, err := r.Read(ba)
+		log.Error(len(g), len(ba))
+		if err != nil {
+			return err
+		}
+
+		err = l.UnmarshalBinary(ba)
 		return err
 	})
 	return l, err

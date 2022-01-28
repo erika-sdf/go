@@ -20,6 +20,7 @@ func (h *LedgerHandler) Handler(c *fiber.Ctx) error {
 	log.Errorf("get ledger %d", i)
 	lcm, err := h.db.GetLedger(uint32(i))
 	if err != nil {
+		log.Error(err)
 		return err
 	}
 	p , err := processors.NewLedgerProcessor(lcm)

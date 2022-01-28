@@ -48,6 +48,7 @@ func (h *TransactionHandler) ByLedgerHandler(c *fiber.Ctx) error {
 	log.Errorf("get ledger %d", i)
 	lcm, err := h.db.GetLedger(uint32(i))
 	if err != nil {
+		log.Error(err)
 		return err
 	}
 	p , err := processors.NewTransactionProcessor(lcm)
@@ -58,10 +59,12 @@ func (h *TransactionHandler) ByLedgerHandler(c *fiber.Ctx) error {
 	limit := c.Query("limit")
 	l, err := strconv.Atoi(limit)
 	if err != nil {
-		return err
+		l = 10
 	}
+
 	t, err := p.GetTransactionsForLedger(l)
 	if err != nil {
+		log.Error(err)
 		return err
 	}
 	return c.JSON(t)

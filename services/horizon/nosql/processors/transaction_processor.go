@@ -64,9 +64,10 @@ func (p *TransactionProcessor) GetTransactionsForLedger(limit int) (map[string]i
 	for _, t := range p.transactions {
 		records = append(records, txnMap(t))
 	}
-	if limit > 0 {
-		records = records[:limit+1]
-	}
+	/*if limit > 0 {
+		num := int(math.Min(float64(len(records)), float64(limit+1)))
+		records = records[:num]
+	}*/
 	r := map[string]interface{}{"records": records}
 	return r, nil
 }

@@ -31,7 +31,7 @@ var nodbCmd = &cobra.Command{
 			}
 		}
 
-		boltDb := nosql2.NewBoltStore("my.db")
+		boltDb := nosql2.NewBoltStore("my.db-lzw-lsb")
 		boltDb.Open()
 		for _, b := range nosql2.GetBuckets() {
 			boltDb.CreateBucketIfNotExists(b)
