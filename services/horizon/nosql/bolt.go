@@ -2,12 +2,14 @@ package nosql
 
 import (
 	"bytes"
-	"compress/lzw"
+	//"compress/lzw"
+	"compress/zlib"
 	"encoding/binary"
 	"fmt"
 	"github.com/boltdb/bolt"
 	"github.com/stellar/go/support/log"
 	"github.com/stellar/go/xdr"
+	"io"
 )
 
 const (
@@ -110,16 +112,40 @@ func (b *BoltStore) GetLedger(id uint32) (xdr.LedgerCloseMeta, error) {
 		log.Errorf("%v: %v", id, IToBa(id, 32))
 		g := b.Get(IToBa(id, 32))
 
-		r := lzw.NewReader(bytes.NewBuffer(g), lzw.LSB, 8)
+		//r := lzw.NewReader(bytes.NewBuffer(g), lzw.LSB, 8)
+		r, err := zlib.NewReader(bytes.NewBuffer(g))
 
-		ba := make([]byte, 1e7)
-		_, err := r.Read(ba)
-		log.Error(len(g), len(ba))
-		if err != nil {
-			return err
+		defer r.Close()
+		compress := make([]byte, 0, 10000000)
+		buf := make([]byte, 4096)
+		i := 0
+		for {
+			n, err := r.Read(buf)
+			copy(compress[i:i+n], buf)
+
+			//log.Errorf("%v", compress[i:i+n])
+			i = i+n
+			log.Errorf("%d bytes read", i)
+			if err == io.EOF {
+				log.Errorf("EOF")
+				break
+			}
+			if err != nil {
+				log.Errorf("err: %v", err)
+				return err
+			}
+
 		}
 
-		err = l.UnmarshalBinary(ba)
+		//ba := make([]byte, 1e7)
+		//_, err := r.Read(ba)
+		//log.Error(len(g), len(ba))
+		//if err != nil {
+		//	return err
+		//}
+
+		err = l.UnmarshalBinary(compress[:i])
+		log.Errorf("%+v", l)
 		return err
 	})
 	return l, err

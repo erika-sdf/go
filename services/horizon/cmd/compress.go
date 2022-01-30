@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"compress/lzw"
 	"compress/zlib"
 	"fmt"
 	"github.com/boltdb/bolt"
@@ -126,7 +125,7 @@ var cmpCmd = &cobra.Command{
 		}
 		defer boltDb.Close()
 
-		compressDb, err := bolt.Open("my.db-lzw-lsb", 0600, nil)
+		compressDb, err := bolt.Open("my.db-zlib", 0600, nil)
 		defer compressDb.Close()
 
 		var orig []byte//:= make([]byte, 1000000)
@@ -138,8 +137,8 @@ var cmpCmd = &cobra.Command{
 
 			orig = ledgerBucket.Get(k)
 
-			w := lzw.NewWriter(compressNew, lzw.LSB, 8)
-			//w := zlib.NewWriter(compressNew)
+			//w := lzw.NewWriter(compressNew, lzw.LSB, 8)
+			w := zlib.NewWriter(compressNew)
 			_, err := w.Write(orig)
 			w.Close()
 			if err !=  nil {
@@ -166,9 +165,10 @@ var cmpCmd = &cobra.Command{
 			ledgerBucket := tx.Bucket([]byte(nosql2.CompressedLedgerMetaBucketName))
 
 			v := ledgerBucket.Get(k)
-			r := lzw.NewReader(bytes.NewBuffer(v), lzw.LSB, 8)
+			//r := lzw.NewReader(bytes.NewBuffer(v), lzw.LSB, 8)
+
+			r, err := zlib.NewReader(bytes.NewBuffer(v))
 			defer r.Close()
-			//r, err := zlib.NewReader(bytes.NewBuffer(v))
 			if err !=nil {
 				return err
 			}
@@ -181,6 +181,7 @@ var cmpCmd = &cobra.Command{
 				i = i+n
 				if err == io.EOF {
 					log.Println("EOF")
+					log.Println(i, " bytes written")
 					break
 				}
 				if err != nil {
