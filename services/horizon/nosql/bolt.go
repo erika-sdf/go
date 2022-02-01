@@ -2,7 +2,9 @@ package nosql
 
 import (
 	"bytes"
-	//"compress/lzw"
+	"compress/flate"
+	"compress/gzip"
+	"compress/lzw"
 	"compress/zlib"
 	"encoding/binary"
 	"fmt"
@@ -13,8 +15,8 @@ import (
 )
 
 const (
-	KeyValueBucketName   = "keyValue"
-	LedgerMetaBucketName = "ledgerMeta"
+	KeyValueBucketName    = "keyValue"
+	LedgerMetaBucketName  = "ledgerMeta"
 	TxnToLedgerBucketName = "txnToLedger"
 
 	CompressedLedgerMetaBucketName = "ledgerMetaCompressed"
@@ -27,13 +29,15 @@ func GetBuckets() []string {
 }
 
 type BoltStore struct {
-	filename string
-	db       *bolt.DB
+	filename    string
+	db          *bolt.DB
+	Compression string
 }
 
-func NewBoltStore(filename string) *BoltStore {
+func NewBoltStore(filename string, compression string) *BoltStore {
 	return &BoltStore{
-		filename: filename,
+		filename:    filename,
+		Compression: compression,
 	}
 }
 
@@ -107,34 +111,56 @@ func (b *BoltStore) WriteLedger(l xdr.LedgerCloseMeta) error {
 func (b *BoltStore) GetLedger(id uint32) (xdr.LedgerCloseMeta, error) {
 	l := xdr.LedgerCloseMeta{}
 	err := b.db.View(func(tx *bolt.Tx) error {
-		//b := tx.Bucket([]byte(LedgerMetaBucketName))
-		b := tx.Bucket([]byte(CompressedLedgerMetaBucketName))
+		bucket := tx.Bucket([]byte(CompressedLedgerMetaBucketName))
+		if b.Compression == "none" {
+			bucket = tx.Bucket([]byte(LedgerMetaBucketName))
+		}
 		log.Errorf("%v: %v", id, IToBa(id, 32))
-		g := b.Get(IToBa(id, 32))
-
-		//r := lzw.NewReader(bytes.NewBuffer(g), lzw.LSB, 8)
-		r, err := zlib.NewReader(bytes.NewBuffer(g))
-
-		defer r.Close()
+		g := bucket.Get(IToBa(id, 32))
+		//log.Errorf("%v", g[0:10])
+		var r io.ReadCloser
+		var err error
+		switch b.Compression {
+		case "lzw":
+			r = lzw.NewReader(bytes.NewBuffer(g), lzw.LSB, 8)
+		case "zlib":
+			r, err = zlib.NewReader(bytes.NewBuffer(g))
+		case "gzip":
+			r, err = gzip.NewReader(bytes.NewBuffer(g))
+		case "flate":
+			r = flate.NewReader(bytes.NewBuffer(g))
+		case "none":
+			//log.Error("no compression")
+		}
+		if r != nil {
+			defer r.Close()
+		}
 		compress := make([]byte, 0, 10000000)
-		buf := make([]byte, 4096)
-		i := 0
-		for {
-			n, err := r.Read(buf)
-			copy(compress[i:i+n], buf)
+		if b.Compression == "none" {
+			//log.Error("no compression - raw data")
+			compress = g
+		} else {
 
-			//log.Errorf("%v", compress[i:i+n])
-			i = i+n
-			log.Errorf("%d bytes read", i)
-			if err == io.EOF {
-				log.Errorf("EOF")
-				break
-			}
-			if err != nil {
-				log.Errorf("err: %v", err)
-				return err
-			}
+			buf := make([]byte, 4096)
+			i := 0
+			for {
+				n, err := r.Read(buf)
+				copy(compress[i:i+n], buf)
 
+				//log.Errorf("%v", compress[i:i+n])
+				i = i + n
+				//log.Errorf("%d bytes read", i)
+				if err == io.EOF {
+					//log.Info("EOF")
+					break
+				}
+				if err != nil {
+					log.Errorf("err: %v", err)
+					return err
+				}
+
+			}
+			compress = compress[:i]
 		}
 
 		//ba := make([]byte, 1e7)
@@ -144,15 +170,15 @@ func (b *BoltStore) GetLedger(id uint32) (xdr.LedgerCloseMeta, error) {
 		//	return err
 		//}
 
-		err = l.UnmarshalBinary(compress[:i])
-		log.Errorf("%+v", l)
+		err = l.UnmarshalBinary(compress)
+		//log.Errorf("%+v", l)
 		return err
 	})
 	return l, err
 }
 
 func (b *BoltStore) GetLedgerFromTransaction(id int64) (uint32, error) {
-    ledgerId := uint32(0)
+	ledgerId := uint32(0)
 	err := b.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(TxnToLedgerBucketName))
 		ledgerIdBa := b.Get(IToBa(id, 64))
@@ -160,7 +186,7 @@ func (b *BoltStore) GetLedgerFromTransaction(id int64) (uint32, error) {
 		return nil
 	})
 
-return ledgerId, err
+	return ledgerId, err
 }
 
 func (b *BoltStore) DeleteRangeAll(start, end int64) error {
@@ -188,6 +214,43 @@ func (b *BoltStore) GetLastLedgerIngestNonBlocking() (uint32, error) {
 	return uint32(lastIngestedLedgerSeq), nil
 }
 
+func Decompress(v []byte, cs string) ([]byte, error) {
+	compress := make([]byte, 0, 10000000)
+	var r io.ReadCloser
+	var err error
+	switch cs {
+	case "zlib":
+		r, err = zlib.NewReader(bytes.NewBuffer(v))
+	case "gzip":
+		r, err = gzip.NewReader(bytes.NewBuffer(v))
+	case "flate":
+		r = flate.NewReader(bytes.NewBuffer(v))
+	default:
+		return nil, err
+	}
+	defer r.Close()
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 4096)
+	i := 0
+	for {
+		n, err := r.Read(buf)
+		//log.Println(n, "bytes read")
+		copy(compress[i:i+n], buf)
+		i = i + n
+		if err == io.EOF {
+			log.Infof("EOF; %d bytes written", i)
+			break
+		}
+		if err != nil {
+			log.Errorf("%d bytes written: %v", i, err)
+			return nil, err
+		}
+
+	}
+	return compress[:i], nil
+}
 
 //
 //func (b *BoltStore) LatestLedgerSequenceClosedAt() (int32, time.Time, error) {

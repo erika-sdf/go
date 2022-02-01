@@ -16,9 +16,9 @@ import (
 	"strconv"
 )
 
-var nodbCmd = &cobra.Command{
-	Use:   "nodb",
-	Short: "run in no-db mode",
+var nodbIngestCmd = &cobra.Command{
+	Use:   "nodb-ingest",
+	Short: "ingest",
 	Long:  "",
 	RunE: func(cmd *cobra.Command, args []string) error {
 
@@ -31,7 +31,7 @@ var nodbCmd = &cobra.Command{
 			}
 		}
 
-		boltDb := nosql2.NewBoltStore("my.db-zlib")
+		boltDb := nosql2.NewBoltStore("my.db-gzip", "gzip")
 		boltDb.Open()
 		for _, b := range nosql2.GetBuckets() {
 			boltDb.CreateBucketIfNotExists(b)
@@ -82,14 +82,29 @@ the reingest command completes.`)
 			}
 			hlog.Info("Range run successfully!")
 		}
-		log.Println("%+v", config)
-		config.BoltStore = boltDb
+		return nil
+	},
+}
 
-		/*app, err := horizon.NewNoSqlAppFromFlags(config, flags)
-		if err != nil {
-			return err
+var nodbCmd = &cobra.Command{
+	Use:   "nodb",
+	Short: "serve in no-db mode",
+	Long:  "",
+	RunE: func(cmd *cobra.Command, args []string) error {
+
+		compressionStrategy := args[0]
+		dbName := fmt.Sprintf("my.db-%s", compressionStrategy)
+		if compressionStrategy == "none" {
+			dbName = "my.db"
 		}
-		return app.ServeNoSql()*/
+		boltDb := nosql2.NewBoltStore(dbName, compressionStrategy)
+		boltDb.Open()
+		for _, b := range nosql2.GetBuckets() {
+			boltDb.CreateBucketIfNotExists(b)
+		}
+		defer boltDb.Close()
+
+		config.BoltStore = boltDb
 
 		app := nosql2.NewNoSqlApp(boltDb)
 		return app.Run()
@@ -103,8 +118,12 @@ var addIdxCmd = &cobra.Command{
 	Short: "add index",
 	Long:  "",
 	RunE: func(cmd *cobra.Command, args []string) error {
-
-		boltDb, err := bolt.Open("my.db", 0600, nil)
+        compressionStrategy := args[0]
+		dbName := fmt.Sprintf("my.db-%s", compressionStrategy)
+		boltDb, err := bolt.Open(dbName, 0600, nil)
+		if err != nil {
+			return nil
+		}
 
 		defer boltDb.Close()
 
@@ -112,9 +131,9 @@ var addIdxCmd = &cobra.Command{
         next := []byte{}
 		k := []byte{}
 		v := []byte{}
-		for {
+		for num < 15500 {
 			err = boltDb.Update(func(tx *bolt.Tx) error {
-				ledgerBucket := tx.Bucket([]byte(nosql2.LedgerMetaBucketName))
+				ledgerBucket := tx.Bucket([]byte(nosql2.CompressedLedgerMetaBucketName))//LedgerMetaBucketName))
 				txnBucket := tx.Bucket([]byte(nosql2.TxnToLedgerBucketName))
 
 				c := ledgerBucket.Cursor()
@@ -123,11 +142,18 @@ var addIdxCmd = &cobra.Command{
 					k, v = c.Seek(next)
 					log.Println("seeking to ", nosql2.BaToI32(k))
 				}
-				//err := ledgerBucket.ForEach(func(k, v []byte) error {
 				for k != nil {
+
+				    dcmp, err := nosql2.Decompress(v, compressionStrategy)
+					if err != nil {
+						return err
+					}
 					l := xdr.LedgerCloseMeta{}
-					err := l.UnmarshalBinary(v)
-					//log.Println(num, l.LedgerSequence())
+					err = l.UnmarshalBinary(dcmp)
+					if err != nil {
+						return err
+					}
+
 					txnPro, err := processors.NewTransactionProcessor(l)
 					if err != nil {
 						return err
@@ -137,29 +163,33 @@ var addIdxCmd = &cobra.Command{
 						return err
 					}
 					for _, t := range txns {
-						log.Println(l.LedgerSequence(), t.TransactionWithoutLedger.ID, nosql2.IToBa(t.TransactionWithoutLedger.ID, 64))
-						err = txnBucket.Put(nosql2.IToBa(t.TransactionWithoutLedger.ID, 64), k)
+						//err = txnBucket.Put(nosql2.IToBa(t.TransactionWithoutLedger.ID, 64), k)
+						err = txnBucket.Put([]byte(t.TransactionWithoutLedger.TransactionHash), k)
 						if err != nil {
 							return err
 						}
 					}
+	                //log.Println("processed ", len(txns), " txns in ledger ",  l.LedgerSequence())
+
 					k, v = c.Next()
 					num += 1
 					if num % 100 == 0 {
 						next = k
+						log.Println("processed ", num, " ledger indexes")
 						break
 					}
-				} //)
+				}
 				return err
 			})
 			log.Println("wrote ", num, "index")
 		}
-
+		log.Fatal(err)
         return err
 	},
 }
 
 func init() {
+	RootCmd.AddCommand(nodbIngestCmd)
 	RootCmd.AddCommand(nodbCmd)
 	RootCmd.AddCommand(addIdxCmd)
 }

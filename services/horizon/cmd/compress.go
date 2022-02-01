@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"bytes"
+	"compress/gzip"
+	"compress/flate"
+	"compress/lzw"
 	"compress/zlib"
 	"fmt"
 	"github.com/boltdb/bolt"
@@ -23,17 +26,26 @@ func writeToDB(db *bolt.DB, k, v []byte ) error {
 	return err
 }
 
+type Writer interface {
+Close() error
+Write(p []byte) (n int, err error)
+}
+
 var compressCmd = &cobra.Command{
 	Use:   "compress",
 	Short: "compress",
 	Long:  "",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		compressionStrategy := args[0]
 
 		boltDb, err := bolt.Open("my.db", 0600, nil)
 		defer boltDb.Close()
 
-		compressDb, err := bolt.Open("my.db-zlib", 0600, nil)
+		dbName := fmt.Sprintf("my.db-%s", compressionStrategy)
+		compressDb, err := bolt.Open(dbName, 0600, nil)
 		defer compressDb.Close()
+
+		log.Println("compressing with strategy: ", compressionStrategy)
 
 		compressDb.Update(func(tx *bolt.Tx) error {
 			_, err := tx.CreateBucketIfNotExists([]byte(nosql2.CompressedLedgerMetaBucketName))
@@ -44,11 +56,6 @@ var compressCmd = &cobra.Command{
 		})
 		//return nil
 
-
-		//bb := new(bytes.Buffer)
-		//w := lzw.NewWriter(bb, lzw.MSB, 8)
-		//r := lzw.NewReader(bb, lzw.LSB, 8)
-		//_, err := r.Read(bytes.NewBuffer(v))
 		num := 0
 		next := []byte{}
 		k := []byte{}
@@ -68,13 +75,27 @@ var compressCmd = &cobra.Command{
 
 				for {
 					compressed := new(bytes.Buffer)
-					w := zlib.NewWriter(compressed)
-					//w := lzw.NewWriter(compressed, lzw.LSB, 8)
+					var w Writer
+					switch compressionStrategy {
+					case "gzip":
+						w = gzip.NewWriter(compressed)
+					case "zlib":
+						w = zlib.NewWriter(compressed)
+					case "lzw":
+						w = lzw.NewWriter(compressed, lzw.LSB, 8)
+					case "flate":
+						w, err = flate.NewWriter(compressed, 9)
+						if err != nil {
+							log.Println(err)
+						}
+					default:
+						log.Fatal("unrecognized compression type")
+					}
 					_, err := w.Write(v)
-					w.Close()
 					if err !=  nil {
 						log.Println(err)
 					}
+					w.Close()
 					//log.Println(compressed.Bytes())
 					if err != nil {
 						return err
