@@ -17,7 +17,7 @@ func (h *TransactionHandler) Handler(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	log.Errorf("get txn %d", txnId)
+	//log.Errorf("get txn %d", txnId)
 	ledgerId, err := h.db.GetLedgerFromTransaction(txnId)
 	if err != nil {
 		return err

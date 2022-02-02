@@ -17,7 +17,7 @@ def query(host, endpoint):
     
 def do_ledgers():
     total = 0
-    for i in range(39137121, 39142121):
+    for i in range(39137121, 39152121):
         endpoint = LEDGER_ENDPOINT.format(i)
         code, res = query(HOST, endpoint)
         if code != 200:
@@ -29,7 +29,7 @@ def do_ledgers():
         
 def do_ledger_transactions():
     total = 0
-    for i in range(39137121, 39142121):
+    for i in range(39137121, 39152121):
         endpoint = LEDGER_TXN_ENDPOINT.format(i)
         code, res = query(HOST, endpoint)
         if code != 200:
@@ -49,7 +49,7 @@ def do_ledger_transactions():
         
 
 if __name__ == "__main__":
-    print('compression lzw')
+    print('compression none')
     start = datetime.now()
     do_ledgers()
     chkpt1 = datetime.now()

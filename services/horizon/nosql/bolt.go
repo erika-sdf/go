@@ -115,7 +115,7 @@ func (b *BoltStore) GetLedger(id uint32) (xdr.LedgerCloseMeta, error) {
 		if b.Compression == "none" {
 			bucket = tx.Bucket([]byte(LedgerMetaBucketName))
 		}
-		log.Errorf("%v: %v", id, IToBa(id, 32))
+		//log.Errorf("%v: %v", id, IToBa(id, 32))
 		g := bucket.Get(IToBa(id, 32))
 		//log.Errorf("%v", g[0:10])
 		var r io.ReadCloser
