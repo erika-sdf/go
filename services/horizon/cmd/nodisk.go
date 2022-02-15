@@ -7,6 +7,7 @@ import (
 	horizon "github.com/stellar/go/services/horizon/internal"
 	"github.com/stellar/go/services/horizon/internal/db2/history"
 	"github.com/stellar/go/services/horizon/internal/ingest"
+
 	nosql2 "github.com/stellar/go/services/horizon/nosql"
 	"github.com/stellar/go/services/horizon/nosql/processors"
 	"github.com/stellar/go/support/errors"
@@ -99,9 +100,7 @@ var nodbCmd = &cobra.Command{
 		}
 		boltDb := nosql2.NewBoltStore(dbName, compressionStrategy)
 		boltDb.Open()
-		for _, b := range nosql2.GetBuckets() {
-			boltDb.CreateBucketIfNotExists(b)
-		}
+		boltDb.CreateAllBuckets()
 		defer boltDb.Close()
 
 		config.BoltStore = boltDb
@@ -112,13 +111,12 @@ var nodbCmd = &cobra.Command{
 	},
 }
 
-
 var addIdxCmd = &cobra.Command{
 	Use:   "addidx",
 	Short: "add index",
 	Long:  "",
 	RunE: func(cmd *cobra.Command, args []string) error {
-        compressionStrategy := args[0]
+		compressionStrategy := args[0]
 		dbName := fmt.Sprintf("my.db-%s", compressionStrategy)
 		boltDb, err := bolt.Open(dbName, 0600, nil)
 		if err != nil {
@@ -128,12 +126,12 @@ var addIdxCmd = &cobra.Command{
 		defer boltDb.Close()
 
 		num := 0
-        next := []byte{}
+		next := []byte{}
 		k := []byte{}
 		v := []byte{}
 		for num < 15500 {
 			err = boltDb.Update(func(tx *bolt.Tx) error {
-				ledgerBucket := tx.Bucket([]byte(nosql2.CompressedLedgerMetaBucketName))//LedgerMetaBucketName))
+				ledgerBucket := tx.Bucket([]byte(nosql2.CompressedLedgerMetaBucketName)) //LedgerMetaBucketName))
 				txnBucket := tx.Bucket([]byte(nosql2.TxnToLedgerBucketName))
 
 				c := ledgerBucket.Cursor()
@@ -144,7 +142,7 @@ var addIdxCmd = &cobra.Command{
 				}
 				for k != nil {
 
-				    dcmp, err := nosql2.Decompress(v, compressionStrategy)
+					dcmp, err := nosql2.Decompress(v, compressionStrategy)
 					if err != nil {
 						return err
 					}
@@ -169,11 +167,11 @@ var addIdxCmd = &cobra.Command{
 							return err
 						}
 					}
-	                //log.Println("processed ", len(txns), " txns in ledger ",  l.LedgerSequence())
+					//log.Println("processed ", len(txns), " txns in ledger ",  l.LedgerSequence())
 
 					k, v = c.Next()
 					num += 1
-					if num % 100 == 0 {
+					if num%100 == 0 {
 						next = k
 						log.Println("processed ", num, " ledger indexes")
 						break
@@ -184,7 +182,62 @@ var addIdxCmd = &cobra.Command{
 			log.Println("wrote ", num, "index")
 		}
 		log.Fatal(err)
-        return err
+		return err
+	},
+}
+
+var ingestStateCmd = &cobra.Command{
+	Use:   "ingst",
+	Short: "ingst",
+	Long:  "current state at ledger arg[0]",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dbName := "my.db"
+		compressionStrategy := ""
+		if len(args) > 1 {
+			compressionStrategy = args[1]
+			if len(compressionStrategy) > 0 {
+				dbName = fmt.Sprintf("my.db-%s", compressionStrategy)
+			}
+		}
+		ledgerArg := args[0]
+		ledgerNumber, err := strconv.Atoi(ledgerArg)
+		if err != nil {
+			return err
+		}
+		boltDb := nosql2.NewBoltStore(dbName, compressionStrategy)
+		boltDb.Open()
+		for _, b := range nosql2.GetBuckets() {
+			boltDb.CreateBucketIfNotExists(b)
+		}
+		defer boltDb.Close()
+
+		err = horizon.ApplyFlags(config, flags, horizon.ApplyOptions{RequireCaptiveCoreConfig: false, AlwaysIngest: true})
+		if err != nil {
+			return err
+		}
+
+		ingestConfig := ingest.Config{
+			NetworkPassphrase:      config.NetworkPassphrase,
+			HistoryArchiveURL:      config.HistoryArchiveURLs[0],
+			CheckpointFrequency:    config.CheckpointFrequency,
+			EnableCaptiveCore:      config.EnableCaptiveCoreIngestion,
+			CaptiveCoreBinaryPath:  config.CaptiveCoreBinaryPath,
+			RemoteCaptiveCoreURL:   config.RemoteCaptiveCoreURL,
+			CaptiveCoreToml:        config.CaptiveCoreToml,
+			CaptiveCoreStoragePath: config.CaptiveCoreStoragePath,
+			StellarCoreCursor:      config.CursorName,
+			StellarCoreURL:         config.StellarCoreURL,
+			BoltStore:              boltDb,
+		}
+		system, systemErr := ingest.NewSystem(ingestConfig)
+		if systemErr != nil {
+			return systemErr
+		}
+		err = system.BuildStateAtLedger(uint32(ledgerNumber))
+		if err != nil {
+			return err
+		}
+		return nil
 	},
 }
 
@@ -192,4 +245,5 @@ func init() {
 	RootCmd.AddCommand(nodbIngestCmd)
 	RootCmd.AddCommand(nodbCmd)
 	RootCmd.AddCommand(addIdxCmd)
+	RootCmd.AddCommand(ingestStateCmd)
 }

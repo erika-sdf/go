@@ -2,6 +2,9 @@ package ingest
 
 import (
 	"bytes"
+	"github.com/stellar/go/services/horizon/nosql"
+
+	//"encoding/binary"
 	"context"
 	"fmt"
 
@@ -190,23 +193,79 @@ func (s *ProcessorRunner) RunGenesisStateIngestion() (ingest.StatsChangeProcesso
 	return s.RunHistoryArchiveIngestion(1, 0, xdr.Hash{})
 }
 
+type MyProcessor struct {
+	db *nosql.BoltStore
+	calls int
+}
+func (p *MyProcessor) ProcessChange(ctx context.Context, change ingest.Change) error {
+	p.calls += 1
+	//t := xdr.Uint32(39137121)
+	//if (change.Pre != nil && change.Pre.LastModifiedLedgerSeq == t) || (change.Post != nil && change.Post.LastModifiedLedgerSeq == t) {
+	//	log.Errorf("******** %+v", change)
+	//}
+	//binary.Write(change)
+	if change.Type == xdr.LedgerEntryTypeAccount {
+		accountId := ""
+		if change.Pre != nil {
+			accountId = change.Pre.Data.Account.AccountId.Address()
+		} else if change.Post != nil {
+			accountId = change.Post.Data.Account.AccountId.Address()
+		}
+		accountChng, err := p.db.GetAccount(accountId)
+		if err != nil {
+			return err
+		}
+		compactor := ingest.NewChangeCompactor()
+		if accountChng != nil {
+			log.Errorf("existing account change: %+v", accountChng)
+			log.Errorf(" new account change: %+v", change)
+			err = compactor.AddChange(*accountChng)
+			if err != nil {
+				return err
+			}
+			err = compactor.AddChange(change)
+			if err != nil {
+				return err
+			}
+			result := compactor.GetChanges()
+			for _, r := range result {
+				log.Errorf("compacted: %+v", r)
+			}
+		} else {
+			err := p.db.WriteAccountChange(accountId, change)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+func (p *MyProcessor) Commit(ctx context.Context) error {
+	log.Errorf("*********** processor called %d times", p.calls)
+	return nil
+}
+
+
 func (s *ProcessorRunner) RunHistoryArchiveIngestion(
 	checkpointLedger uint32,
 	ledgerProtocolVersion uint32,
 	bucketListHash xdr.Hash,
 ) (ingest.StatsChangeProcessorResults, error) {
 	changeStats := ingest.StatsChangeProcessor{}
-	changeProcessor := buildChangeProcessor(s.historyQ, &changeStats, historyArchiveSource, checkpointLedger)
+	//changeProcessor := buildChangeProcessor(s.historyQ, &changeStats, historyArchiveSource, checkpointLedger)
+	//
+	//if checkpointLedger == 1 {
+	//	if err := changeProcessor.ProcessChange(s.ctx, ingest.GenesisChange(s.config.NetworkPassphrase)); err != nil {
+	//		return changeStats.GetResults(), errors.Wrap(err, "Error ingesting genesis ledger")
+	//	}
+	//} else {
+	//	if err := s.checkIfProtocolVersionSupported(ledgerProtocolVersion); err != nil {
+	//		return changeStats.GetResults(), errors.Wrap(err, "Error while checking for supported protocol version")
+	//	}
 
-	if checkpointLedger == 1 {
-		if err := changeProcessor.ProcessChange(s.ctx, ingest.GenesisChange(s.config.NetworkPassphrase)); err != nil {
-			return changeStats.GetResults(), errors.Wrap(err, "Error ingesting genesis ledger")
-		}
-	} else {
-		if err := s.checkIfProtocolVersionSupported(ledgerProtocolVersion); err != nil {
-			return changeStats.GetResults(), errors.Wrap(err, "Error while checking for supported protocol version")
-		}
 
+
+	changeProcessor := &MyProcessor{db: s.config.BoltStore}
 		if err := s.validateBucketList(checkpointLedger, bucketListHash); err != nil {
 			return changeStats.GetResults(), errors.Wrap(err, "Error validating bucket list from HAS")
 		}
@@ -231,10 +290,10 @@ func (s *ProcessorRunner) RunHistoryArchiveIngestion(
 		if err != nil {
 			return changeStats.GetResults(), errors.Wrap(err, "Error streaming changes from HAS")
 		}
-	}
+	//}
 
 	if err := changeProcessor.Commit(s.ctx); err != nil {
-		return changeStats.GetResults(), errors.Wrap(err, "Error commiting changes from processor")
+		return changeStats.GetResults(), errors.Wrap(err, "Error committing changes from processor")
 	}
 
 	return changeStats.GetResults(), nil

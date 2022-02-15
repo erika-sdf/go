@@ -7,8 +7,10 @@ import (
 	"compress/lzw"
 	"compress/zlib"
 	"encoding/binary"
+	"encoding/gob"
 	"fmt"
 	"github.com/boltdb/bolt"
+	"github.com/stellar/go/ingest"
 	"github.com/stellar/go/support/log"
 	"github.com/stellar/go/xdr"
 	"io"
@@ -22,10 +24,12 @@ const (
 	CompressedLedgerMetaBucketName = "ledgerMetaCompressed"
 
 	LastIngestedLedgerKey = "lastIngestedLedger"
+
+	AccountChangeBucketName = "accountChange"
 )
 
 func GetBuckets() []string {
-	return []string{KeyValueBucketName, LedgerMetaBucketName, TxnToLedgerBucketName, CompressedLedgerMetaBucketName}
+	return []string{KeyValueBucketName, LedgerMetaBucketName, TxnToLedgerBucketName, CompressedLedgerMetaBucketName, AccountChangeBucketName}
 }
 
 type BoltStore struct {
@@ -84,6 +88,16 @@ func baToI64(ba []byte) uint64 {
 	return binary.LittleEndian.Uint64(ba)
 }
 
+func (b *BoltStore) CreateAllBuckets() error {
+	for _, bucket := range GetBuckets() {
+		err := b.CreateBucketIfNotExists(bucket)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (b *BoltStore) CreateBucketIfNotExists(bucketName string) error {
 	return b.db.Update(func(tx *bolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists([]byte(bucketName))
@@ -91,6 +105,89 @@ func (b *BoltStore) CreateBucketIfNotExists(bucketName string) error {
 			return fmt.Errorf("error creating bucket %s", err)
 		}
 		return nil
+	})
+}
+
+func (b *BoltStore) getBucket(bucketName string) (*bolt.Bucket, error) {
+	var bucket *bolt.Bucket
+	err := b.db.View(func(tx *bolt.Tx) error {
+		bucket = tx.Bucket([]byte(bucketName))
+		return nil
+	})
+	return bucket, err
+}
+
+func (b *BoltStore) WriteAccountChange(accountId string, accChange ingest.Change) error {
+	bucket, err := b.getBucket(AccountChangeBucketName)
+	if err != nil {
+		return err
+	}
+	return b.writeChange(bucket, []byte(accountId), accChange)
+}
+
+func (b * BoltStore) getCompressionReader (g []byte) (io.ReadCloser, error) {
+	var r io.ReadCloser
+	var err error
+	switch b.Compression {
+	case "lzw":
+		r = lzw.NewReader(bytes.NewBuffer(g), lzw.LSB, 8)
+	case "zlib":
+		r, err = zlib.NewReader(bytes.NewBuffer(g))
+	case "gzip":
+		r, err = gzip.NewReader(bytes.NewBuffer(g))
+	case "flate":
+		r = flate.NewReader(bytes.NewBuffer(g))
+	case "none":
+		//log.Error("no compression")
+	}
+	return r, err
+}
+
+func (b *BoltStore) GetAccount(id string) (*ingest.Change, error) {
+	var a *ingest.Change
+	err := b.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(AccountChangeBucketName))
+		g := bucket.Get([]byte(id))
+        r, err := b.getCompressionReader(g)
+		if r != nil {
+			defer r.Close()
+		}
+		compress := make([]byte, 0, 10000000)
+		if b.Compression == "none" || b.Compression == "" {
+			compress = g
+		} else {
+			buf := make([]byte, 4096)
+			i := 0
+			for {
+				n, err := r.Read(buf)
+				copy(compress[i:i+n], buf)
+				i = i + n
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					log.Errorf("err: %v", err)
+					return err
+				}
+			}
+			compress = compress[:i]
+		}
+		dec := gob.NewDecoder(bytes.NewBuffer(compress))
+		err = dec.Decode(a)
+		return err
+	})
+	return a, err
+}
+func (b *BoltStore) writeChange(bucket *bolt.Bucket, key []byte, change ingest.Change) error {
+	return b.db.Update(func(tx *bolt.Tx) error {
+		var cBytes bytes.Buffer
+		enc := gob.NewEncoder(&cBytes)
+		err := enc.Encode(change)
+		if err != nil {
+			return err
+		}
+		err = bucket.Put(key, cBytes.Bytes())
+		return err
 	})
 }
 
@@ -118,20 +215,7 @@ func (b *BoltStore) GetLedger(id uint32) (xdr.LedgerCloseMeta, error) {
 		//log.Errorf("%v: %v", id, IToBa(id, 32))
 		g := bucket.Get(IToBa(id, 32))
 		//log.Errorf("%v", g[0:10])
-		var r io.ReadCloser
-		var err error
-		switch b.Compression {
-		case "lzw":
-			r = lzw.NewReader(bytes.NewBuffer(g), lzw.LSB, 8)
-		case "zlib":
-			r, err = zlib.NewReader(bytes.NewBuffer(g))
-		case "gzip":
-			r, err = gzip.NewReader(bytes.NewBuffer(g))
-		case "flate":
-			r = flate.NewReader(bytes.NewBuffer(g))
-		case "none":
-			//log.Error("no compression")
-		}
+		r, err := b.getCompressionReader(g)
 		if r != nil {
 			defer r.Close()
 		}
@@ -163,15 +247,7 @@ func (b *BoltStore) GetLedger(id uint32) (xdr.LedgerCloseMeta, error) {
 			compress = compress[:i]
 		}
 
-		//ba := make([]byte, 1e7)
-		//_, err := r.Read(ba)
-		//log.Error(len(g), len(ba))
-		//if err != nil {
-		//	return err
-		//}
-
 		err = l.UnmarshalBinary(compress)
-		//log.Errorf("%+v", l)
 		return err
 	})
 	return l, err

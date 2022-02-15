@@ -163,6 +163,7 @@ type System interface {
 	VerifyRange(fromLedger, toLedger uint32, verifyState bool) error
 	ReingestRange(ledgerRanges []history.LedgerRange, force bool) error
 	BuildGenesisState() error
+	BuildStateAtLedger(ledgerNumber uint32) error
 	Shutdown()
 }
 type system struct {
@@ -210,7 +211,6 @@ func NewSystem(config Config) (System, error) {
 		cancel()
 		return nil, errors.Wrap(err, "error creating history archive")
 	}
-
 	var ledgerBackend ledgerbackend.LedgerBackend
 	if config.EnableCaptiveCore {
 		if len(config.RemoteCaptiveCoreURL) > 0 {
@@ -229,7 +229,7 @@ func NewSystem(config Config) (System, error) {
 					NetworkPassphrase:   config.NetworkPassphrase,
 					HistoryArchiveURLs:  []string{config.HistoryArchiveURL},
 					CheckpointFrequency: config.CheckpointFrequency,
-					LedgerHashStore:     ledgerbackend.NewHorizonDBLedgerHashStore(config.HistorySession),
+					//LedgerHashStore:     ledgerbackend.NewHorizonDBLedgerHashStore(config.HistorySession),
 					Log:                 logger,
 					Context:             ctx,
 				},
@@ -550,6 +550,30 @@ func (s *system) ReingestRange(ledgerRanges []history.LedgerRange, force bool) e
 		}
 	}
 	return nil
+}
+
+func (s *system) BuildStateAtLedger(ledger uint32) error {
+	checkpointLedger := s.checkpointManager.PrevCheckpoint(ledger)
+	err := s.maybePrepareRange(context.Background(), checkpointLedger)
+	if err != nil {
+		return errors.Wrap(err, "error preping ledger range")
+	}
+
+	ledgerCloseMeta, err := s.ledgerBackend.GetLedger(context.Background(), checkpointLedger)
+	if err != nil {
+		return errors.Wrap(err, "error getting ledger blocking")
+	}
+
+	if checkpointLedger == 1 {
+		_, err = s.runner.RunGenesisStateIngestion()
+	} else {
+		_, err = s.runner.RunHistoryArchiveIngestion(
+			ledgerCloseMeta.LedgerSequence(),
+			ledgerCloseMeta.ProtocolVersion(),
+			ledgerCloseMeta.BucketListHash(),
+		)
+	}
+	return err
 }
 
 // BuildGenesisState runs the ingestion pipeline on genesis ledger. Transitions

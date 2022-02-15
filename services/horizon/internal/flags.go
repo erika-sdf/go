@@ -566,7 +566,7 @@ func ApplyFlags(config *Config, flags support.ConfigOptions, options ApplyOption
 		// Migrations should be checked as early as possible. Apply and check
 		// only on ingesting instances which are required to have write-access
 		// to the DB.
-		if config.ApplyMigrations {
+		/*if config.ApplyMigrations {
 			if err := applyMigrations(*config); err != nil {
 				return err
 			}
@@ -574,7 +574,7 @@ func ApplyFlags(config *Config, flags support.ConfigOptions, options ApplyOption
 		if err := checkMigrations(*config); err != nil {
 			return err
 		}
-
+*/
 		// config.HistoryArchiveURLs contains a single empty value when empty so using
 		// viper.GetString is easier.
 		if len(config.HistoryArchiveURLs) == 0 {
