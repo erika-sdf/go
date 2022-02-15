@@ -125,10 +125,10 @@ func (b *BoltStore) WriteAccountChange(accountId string, accChange ingest.Change
 	return b.writeChange(bucket, []byte(accountId), accChange)
 }
 
-func (b * BoltStore) getCompressionReader (g []byte) (io.ReadCloser, error) {
+func GetCompressionReader(g []byte, compression string) (io.ReadCloser, error) {
 	var r io.ReadCloser
 	var err error
-	switch b.Compression {
+	switch compression {
 	case "lzw":
 		r = lzw.NewReader(bytes.NewBuffer(g), lzw.LSB, 8)
 	case "zlib":
@@ -143,12 +143,34 @@ func (b * BoltStore) getCompressionReader (g []byte) (io.ReadCloser, error) {
 	return r, err
 }
 
+func GetCompressionWriter(g *bytes.Buffer, compression string) (io.WriteCloser, error) {
+	var w io.WriteCloser
+	var err error
+	switch compression {
+	case "lzw":
+		w = lzw.NewWriter(g, lzw.LSB, 8)
+	case "zlib":
+		w = zlib.NewWriter(g)
+	case "gzip":
+		w = gzip.NewWriter(g)
+	case "flate":
+		w, err = flate.NewWriter(g, flate.DefaultCompression)
+	case "none":
+		//log.Error("no compression")
+	}
+	return w, err
+}
+
 func (b *BoltStore) GetAccount(id string) (*ingest.Change, error) {
-	var a *ingest.Change
+	var a ingest.Change
 	err := b.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte(AccountChangeBucketName))
 		g := bucket.Get([]byte(id))
-        r, err := b.getCompressionReader(g)
+		if g == nil {
+			return nil
+		}
+		decompressed, err := Decompress(g, b.Compression)
+        /*r, err := GetCompressionReader(g, b.Compression)
 		if r != nil {
 			defer r.Close()
 		}
@@ -171,18 +193,24 @@ func (b *BoltStore) GetAccount(id string) (*ingest.Change, error) {
 				}
 			}
 			compress = compress[:i]
-		}
-		dec := gob.NewDecoder(bytes.NewBuffer(compress))
-		err = dec.Decode(a)
+		}*/
+		log.Errorf("account id %+v", id)
+		log.Errorf("account id %+v", []byte(id))
+		log.Errorf("%+v", decompressed)
+		dec := gob.NewDecoder(bytes.NewBuffer(decompressed))
+		a = ingest.Change{}
+		err = dec.Decode(&a)
 		return err
 	})
-	return a, err
+	return &a, err
 }
+
 func (b *BoltStore) writeChange(bucket *bolt.Bucket, key []byte, change ingest.Change) error {
 	return b.db.Update(func(tx *bolt.Tx) error {
 		var cBytes bytes.Buffer
 		enc := gob.NewEncoder(&cBytes)
 		err := enc.Encode(change)
+		log.Errorf("encoded: %+v %+v", change, cBytes.Bytes())
 		if err != nil {
 			return err
 		}
@@ -193,14 +221,19 @@ func (b *BoltStore) writeChange(bucket *bolt.Bucket, key []byte, change ingest.C
 
 func (b *BoltStore) WriteLedger(l xdr.LedgerCloseMeta) error {
 	return b.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte(LedgerMetaBucketName))
+		bucket := tx.Bucket([]byte(LedgerMetaBucketName))
 		lBytes, err := l.MarshalBinary()
 		if err != nil {
 			return err
 		}
-		log.Errorf("Writing ledger %v", l.LedgerSequence())
-		log.Errorf("%v: %v", l.LedgerSequence(), IToBa(l.LedgerSequence(), 32))
-		err = b.Put(IToBa(l.LedgerSequence(), 32), lBytes)
+		compressed, err := Compress(lBytes, b.Compression)
+		if err != nil {
+			return err
+		}
+		
+		//log.Errorf("Writing ledger %v", l.LedgerSequence())
+		//log.Errorf("%v: %v", l.LedgerSequence(), IToBa(l.LedgerSequence(), 32))
+		err = bucket.Put(IToBa(l.LedgerSequence(), 32), compressed)
 		return err
 	})
 }
@@ -212,10 +245,12 @@ func (b *BoltStore) GetLedger(id uint32) (xdr.LedgerCloseMeta, error) {
 		if b.Compression == "none" {
 			bucket = tx.Bucket([]byte(LedgerMetaBucketName))
 		}
-		//log.Errorf("%v: %v", id, IToBa(id, 32))
 		g := bucket.Get(IToBa(id, 32))
-		//log.Errorf("%v", g[0:10])
-		r, err := b.getCompressionReader(g)
+		if g == nil {
+			return nil
+		}
+		compress, err := Decompress(g, b.Compression)
+		/*r, err := GetCompressionReader(g, b.Compression)
 		if r != nil {
 			defer r.Close()
 		}
@@ -245,7 +280,7 @@ func (b *BoltStore) GetLedger(id uint32) (xdr.LedgerCloseMeta, error) {
 
 			}
 			compress = compress[:i]
-		}
+		}*/
 
 		err = l.UnmarshalBinary(compress)
 		return err
@@ -290,20 +325,23 @@ func (b *BoltStore) GetLastLedgerIngestNonBlocking() (uint32, error) {
 	return uint32(lastIngestedLedgerSeq), nil
 }
 
+func Compress(v []byte, cs string) ([]byte, error) {
+	compressed := bytes.NewBuffer(make([]byte, 0, 10000000))
+	w, err := GetCompressionWriter(compressed, cs)
+	n, err := w.Write(v)
+	w.Close()
+	c := compressed.Bytes()[:n]
+	return c, err
+}
+
 func Decompress(v []byte, cs string) ([]byte, error) {
+	if cs == "none" || cs == "" {
+		return v, nil
+	}
 	compress := make([]byte, 0, 10000000)
 	var r io.ReadCloser
 	var err error
-	switch cs {
-	case "zlib":
-		r, err = zlib.NewReader(bytes.NewBuffer(v))
-	case "gzip":
-		r, err = gzip.NewReader(bytes.NewBuffer(v))
-	case "flate":
-		r = flate.NewReader(bytes.NewBuffer(v))
-	default:
-		return nil, err
-	}
+	r, err = GetCompressionReader(v, cs)
 	defer r.Close()
 	if err != nil {
 		return nil, err

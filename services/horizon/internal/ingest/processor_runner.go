@@ -194,45 +194,55 @@ func (s *ProcessorRunner) RunGenesisStateIngestion() (ingest.StatsChangeProcesso
 }
 
 type MyProcessor struct {
-	db *nosql.BoltStore
+	db    *nosql.BoltStore
 	calls int
 }
+
 func (p *MyProcessor) ProcessChange(ctx context.Context, change ingest.Change) error {
 	p.calls += 1
-	//t := xdr.Uint32(39137121)
-	//if (change.Pre != nil && change.Pre.LastModifiedLedgerSeq == t) || (change.Post != nil && change.Post.LastModifiedLedgerSeq == t) {
-	//	log.Errorf("******** %+v", change)
-	//}
-	//binary.Write(change)
-	if change.Type == xdr.LedgerEntryTypeAccount {
-		accountId := ""
-		if change.Pre != nil {
-			accountId = change.Pre.Data.Account.AccountId.Address()
-		} else if change.Post != nil {
-			accountId = change.Post.Data.Account.AccountId.Address()
-		}
-		accountChng, err := p.db.GetAccount(accountId)
-		if err != nil {
-			return err
-		}
-		compactor := ingest.NewChangeCompactor()
-		if accountChng != nil {
-			log.Errorf("existing account change: %+v", accountChng)
-			log.Errorf(" new account change: %+v", change)
-			err = compactor.AddChange(*accountChng)
+	switch change.Type {
+	case xdr.LedgerEntryTypeAccount:
+		{
+			accountId := ""
+			if change.Pre != nil {
+				accountId = change.Pre.Data.Account.AccountId.Address()
+			} else if change.Post != nil {
+				accountId = change.Post.Data.Account.AccountId.Address()
+			}
+			exist, err := p.db.GetAccount(accountId)
 			if err != nil {
 				return err
 			}
-			err = compactor.AddChange(change)
+			if exist != nil {
+				change, err = compactChange(*exist, change)
+				if err != nil {
+					return err
+				}
+			}
+			err = p.db.WriteAccountChange(accountId, change)
 			if err != nil {
 				return err
 			}
-			result := compactor.GetChanges()
-			for _, r := range result {
-				log.Errorf("compacted: %+v", r)
+		}
+	case xdr.LedgerEntryTypeOffer:
+		{
+			var offerId int64
+			if change.Pre != nil {
+				offerId = int64(change.Pre.Data.Offer.OfferId)
+			} else if change.Post != nil {
+				offerId = int64(change.Post.Data.Offer.OfferId)
 			}
-		} else {
-			err := p.db.WriteAccountChange(accountId, change)
+			exist, err := p.db.GetOffer(offerId)
+			if err != nil {
+				return err
+			}
+			if exist != nil {
+				change, err = compactChange(*exist, change)
+				if err != nil {
+					return err
+				}
+			}
+			err = p.db.WriteOfferChange(offerId, change)
 			if err != nil {
 				return err
 			}
@@ -245,6 +255,27 @@ func (p *MyProcessor) Commit(ctx context.Context) error {
 	return nil
 }
 
+func compactChange(old, new ingest.Change) (ingest.Change, error) {
+	compactor := ingest.NewChangeCompactor()
+	log.Errorf("existing account change: %+v", old)
+	log.Errorf(" new account change: %+v", new)
+	err := compactor.AddChange(old)
+	if err != nil {
+		return ingest.Change{}, err
+	}
+	err = compactor.AddChange(new)
+	if err != nil {
+		return ingest.Change{}, err
+	}
+	result := compactor.GetChanges()
+	for _, r := range result {
+		log.Errorf("compacted: %+v", r)
+	}
+	if len(result) < 1 {
+		return ingest.Change{}, errors.New("no changes from compactor!")
+	}
+	return result[0], nil
+}
 
 func (s *ProcessorRunner) RunHistoryArchiveIngestion(
 	checkpointLedger uint32,
@@ -263,33 +294,31 @@ func (s *ProcessorRunner) RunHistoryArchiveIngestion(
 	//		return changeStats.GetResults(), errors.Wrap(err, "Error while checking for supported protocol version")
 	//	}
 
-
-
 	changeProcessor := &MyProcessor{db: s.config.BoltStore}
-		if err := s.validateBucketList(checkpointLedger, bucketListHash); err != nil {
-			return changeStats.GetResults(), errors.Wrap(err, "Error validating bucket list from HAS")
-		}
+	if err := s.validateBucketList(checkpointLedger, bucketListHash); err != nil {
+		return changeStats.GetResults(), errors.Wrap(err, "Error validating bucket list from HAS")
+	}
 
-		changeReader, err := s.historyAdapter.GetState(s.ctx, checkpointLedger)
-		if err != nil {
-			return changeStats.GetResults(), errors.Wrap(err, "Error creating HAS reader")
-		}
+	changeReader, err := s.historyAdapter.GetState(s.ctx, checkpointLedger)
+	if err != nil {
+		return changeStats.GetResults(), errors.Wrap(err, "Error creating HAS reader")
+	}
 
-		defer changeReader.Close()
+	defer changeReader.Close()
 
-		log.WithField("sequence", checkpointLedger).
-			Info("Processing entries from History Archive Snapshot")
+	log.WithField("sequence", checkpointLedger).
+		Info("Processing entries from History Archive Snapshot")
 
-		err = processors.StreamChanges(s.ctx, changeProcessor, newloggingChangeReader(
-			changeReader,
-			"historyArchive",
-			checkpointLedger,
-			logFrequency,
-			s.logMemoryStats,
-		))
-		if err != nil {
-			return changeStats.GetResults(), errors.Wrap(err, "Error streaming changes from HAS")
-		}
+	err = processors.StreamChanges(s.ctx, changeProcessor, newloggingChangeReader(
+		changeReader,
+		"historyArchive",
+		checkpointLedger,
+		logFrequency,
+		s.logMemoryStats,
+	))
+	if err != nil {
+		return changeStats.GetResults(), errors.Wrap(err, "Error streaming changes from HAS")
+	}
 	//}
 
 	if err := changeProcessor.Commit(s.ctx); err != nil {

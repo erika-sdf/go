@@ -192,7 +192,7 @@ var ingestStateCmd = &cobra.Command{
 	Long:  "current state at ledger arg[0]",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dbName := "my.db"
-		compressionStrategy := ""
+		compressionStrategy := "none"
 		if len(args) > 1 {
 			compressionStrategy = args[1]
 			if len(compressionStrategy) > 0 {
